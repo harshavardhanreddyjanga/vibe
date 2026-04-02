@@ -1,0 +1,17 @@
+# This is a config for E2B sandbox template.
+# You can use template ID (nwalscuh776w5ntdvfs7) or template name (vibe-nextjs-harsha-j2) to create a sandbox:
+
+# Python SDK
+# from e2b import Sandbox, AsyncSandbox
+# sandbox = Sandbox.create("vibe-nextjs-harsha-j2") # Sync sandbox
+# sandbox = await AsyncSandbox.create("vibe-nextjs-harsha-j2") # Async sandbox
+
+# JS SDK
+# import { Sandbox } from 'e2b'
+# const sandbox = await Sandbox.create('vibe-nextjs-harsha-j2')
+
+team_id = "049a14eb-fa17-4517-84b4-e39400320e9f"
+start_cmd = "/compile_page.sh"
+dockerfile = "e2b.Dockerfile"
+template_name = "vibe-nextjs-harsha-j2"
+template_id = "nwalscuh776w5ntdvfs7"
