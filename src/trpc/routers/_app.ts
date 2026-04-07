@@ -1,33 +1,11 @@
 import { email, z } from 'zod';
-import { baseProcedure, createTRPCRouter } from '../init';
+import { createTRPCRouter } from '../init';
 import { inngest } from '@/src/inngest/client';
+import { messageRouter } from '@/src/modules/messages/server/procedures';
  
 export const appRouter = createTRPCRouter({
-  invoke : baseProcedure
-  .input(
-    z.object({
-      value : z.string()
-    })
-  )
-  .mutation(async({input})=>{
-    await inngest.send({
-      name : "test/hello.world",
-      data : {
-        value : input.value
-      }
-    })
-  }),
-  hello: baseProcedure
-    .input(
-      z.object({
-        text: z.string(),
-      }),
-    )
-    .query((opts) => {
-      return {
-        greeting: `hello ${opts.input.text}`,
-      };
-    }),
+   messages : messageRouter,
+   
 });
  
 // export type definition of API
