@@ -1,27 +1,71 @@
 import { inngest } from "@/src/inngest/client";
 import prisma from "@/src/lib/db";
-import { baseProcedure, createTRPCRouter } from "@/src/trpc/init";
+import { consumeCredits } from "@/src/lib/usage";
+import { protectedProcedure, createTRPCRouter } from "@/src/trpc/init";
+import { TRPCError } from "@trpc/server";
 import z from "zod";
 
 export const messageRouter = createTRPCRouter({
-    getMany : baseProcedure
-    .query(async ()=>{
+    getMany : protectedProcedure
+    .input(
+        z.object({
+            projectId : z.string().min(1,{message : "project id is required"})
+        })
+    )
+    .query(async ( { input,ctx } )=>{
         const messages = await prisma.message.findMany({
+            where:{
+                projectId : input.projectId,
+                project : {
+                    userId:ctx.auth.userId
+                }
+            },
+            include:{
+                fragment:true,
+            },
             orderBy:{
                 updatedAt:"asc"
             }
         })
         return messages;
     }),
-    create : baseProcedure
+    create : protectedProcedure
     .input(
         z.object({
-            value : z.string().min(1,{message : "message is required"})
+            value : z.string()
+                    .min(1,{message : "value is required"})
+                    .max(10000,{message: "value is too long"}),
+            projectId : z.string().min(1,{message : "project id is required"})
         })
     )
-    .mutation(async({input}) =>{
+    .mutation(async({input,ctx}) =>{
+        const existingProject = await prisma.project.findUnique({
+            where:{
+                id : input.projectId,
+                userId : ctx.auth.userId,
+            }
+        })
+        if(!existingProject){
+            throw new TRPCError({code : "NOT_FOUND",message:"Project not found"})
+        }
+        
+         try {
+            const result  = await consumeCredits();
+            console.log("result",result)
+        } catch (error) {
+            if (error instanceof Error) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Something went wrong" });
+            } else {
+            throw new TRPCError({
+                code: "TOO_MANY_REQUESTS",
+                message: "You have run out of credits"
+            });
+            }
+        }
+
         const createdMessage = await prisma.message.create({
             data:{
+                projectId : input.projectId,
                 content : input.value,
                 role : "USER",
                 type : "RESULT"
@@ -30,7 +74,8 @@ export const messageRouter = createTRPCRouter({
          await inngest.send({
               name : "code-agent/run",
               data : {
-                value : input.value
+                value : input.value,
+                projectId : input.projectId,
               }
             })
             return createdMessage;

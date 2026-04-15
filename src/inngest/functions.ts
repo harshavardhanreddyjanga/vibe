@@ -1,13 +1,14 @@
 
 // src/inngest/functions.ts
-import {  gemini, createAgent, createTool, createNetwork, openai, type Tool } from "@inngest/agent-kit";
+import {  gemini, createAgent, createTool, createNetwork, openai, type Tool, Message, createState } from "@inngest/agent-kit";
 import { inngest } from "./client";
 
 import { Sandbox } from "@e2b/code-interpreter"
-import { getSandbox, lastAssistantTextMessageContent } from "./utils";
+import { getSandbox, lastAssistantTextMessageContent, parseAgentOutput } from "./utils";
 import z, { file } from "zod";
-import { PROMPT } from "../prompt";
+import { PROMPT, FRAGMENT_TITLE_PROMPT,RESPONSE_PROMPT } from "../prompt";
 import prisma from "../lib/db";
+import { SANDBOX_TIMEOUT } from "./types";
 
 interface AgentState{
   summary : string,
@@ -21,17 +22,51 @@ export const codeAgentFunction = inngest.createFunction(
 
     const sandboxId = await step.run("get-sandbox-id",async()=>{
       const sandbox = await Sandbox.create("jangaharshavardhanreddy/vibe-nextjs-harsha-j2")
+      //  await sandbox.setTimeout(SANDBOX_TIMEOUT)
       return sandbox.sandboxId
     })
+
+    const previousMessages = await step.run("get-previous-messages",async()=>{
+      const formattedMessages : Message[] = []
+      
+      const messages = await prisma.message.findMany({
+        where : {
+          projectId : event.data.projectId,
+        },
+        orderBy:{
+          createdAt:"desc"
+        },
+        take : 5
+      })
+
+      for(const message of messages ){
+        formattedMessages.push({
+          type : "text",
+          role : message.role === "ASSISSTANT" ? "assistant" : "user",
+          content : message.content
+        })
+      }
+       return formattedMessages.reverse()
+    })
+
+    const state = createState<AgentState>(
+      {
+        summary:"",
+        files:{}
+      },
+      {
+        messages:previousMessages,
+      }
+  )
 
     const codeAgent = createAgent<AgentState>({
       name: "code-agent",
       description : "An expert coding agent",
       system: PROMPT,
       model: openai({
-         model: "llama-3.3-70b-versatile", // Or any Groq-supported model
-         apiKey: process.env.GROQ_API_KEY, 
-         baseUrl: "https://api.groq.com/openai/v1" 
+          model: "llama-3.1-8b-instant",
+          apiKey:process.env.OPENAI_API_KEY,
+          baseUrl:"https://api.groq.com/openai/v1",
         }),
       tools : [
         createTool({
@@ -133,6 +168,7 @@ export const codeAgentFunction = inngest.createFunction(
       name : "coding-agent-network",
       agents : [codeAgent],
       maxIter : 15,
+      defaultState:state,
       router:async({network})=>{
         const summary = network.state.data.summary;
         if(summary){
@@ -142,10 +178,39 @@ export const codeAgentFunction = inngest.createFunction(
       }
     })
 
-   const result = await network.run(event.data.value)
-    // console.log(output);
+     const  result = await network.run(event.data.value,{state});
 
-    const isError = !result.state.data.summary || Object.keys(result.state.data.files || {}).length ==0
+     const fragmentTitleGenerator = createAgent({
+      name: "fragment-title-generator",
+      description: "A fragment title generator",
+      system: FRAGMENT_TITLE_PROMPT,
+      model: openai({ 
+         model: "llama-3.1-8b-instant",
+          apiKey:process.env.OPENAI_API_KEY,
+          baseUrl:"https://api.groq.com/openai/v1",
+      }),
+    })
+
+    const responseGenerator = createAgent({
+      name: "response-generator",
+      description: "A response generator",
+      system: RESPONSE_PROMPT,
+      model: openai({ 
+         model: "llama-3.1-8b-instant",
+          apiKey:process.env.OPENAI_API_KEY,
+          baseUrl:"https://api.groq.com/openai/v1",
+      }),
+    });
+
+    const { 
+      output: fragmentTitleOuput
+    } = await fragmentTitleGenerator.run(result.state.data.summary);
+    const { 
+      output: responseOutput
+    } = await responseGenerator.run(result.state.data.summary);
+
+
+    const isError = !result?.state.data.summary || Object.keys(result.state.data.files || {}).length ==0
     
     const sandboxUrl = await step.run("get-sandbox-url",async()=>{
       const sandbox = await getSandbox(sandboxId)
@@ -157,6 +222,7 @@ export const codeAgentFunction = inngest.createFunction(
       if(isError){
         return await prisma.message.create({
           data : {
+            projectId : event.data.projectId,
             content : "somenthing went wrong, please try again",
             role : "ASSISSTANT",
             type : "ERROR" 
@@ -165,14 +231,15 @@ export const codeAgentFunction = inngest.createFunction(
       }
       return prisma.message.create({
         data : {
-          content : result.state.data.summary,
+          projectId : event.data.projectId,
+          content : parseAgentOutput(responseOutput.choices[0].message.content),
           role : "ASSISSTANT",
           type : "RESULT",
           fragment : {
             create:{
               sandboxUrl : sandboxUrl,
-              title : "Fragment",
-              files : result.state.data.files
+              title :  parseAgentOutput(fragmentTitleOuput.choices[0].message.content),
+              files : result?.state.data.files
             }
           }
         }
